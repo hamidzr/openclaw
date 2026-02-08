@@ -768,6 +768,37 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               }
             }
           }
+
+          // Validate that agentTurn jobs have usable delivery config after normalization
+          if (
+            job &&
+            typeof job === "object" &&
+            "payload" in job &&
+            (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
+          ) {
+            const deliveryValue = (job as { delivery?: unknown }).delivery;
+            const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
+            const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
+            const mode = modeRaw.trim().toLowerCase();
+            
+            if (!delivery || (mode !== "webhook" && mode !== "announce" && mode !== "none")) {
+              throw new Error(
+                'agentTurn jobs require delivery config. Set delivery.mode to "announce" (for chat delivery) or "webhook" (for HTTP POST callback). For user-facing reminders, use sessionTarget="isolated" with payload.kind="agentTurn" and set delivery.channel/to explicitly, or ensure the agent session key contains a valid peer target.',
+              );
+            }
+
+            if (mode === "announce") {
+              const hasChannel = typeof delivery.channel === "string" && delivery.channel.trim();
+              const hasTo = typeof delivery.to === "string" && delivery.to.trim();
+              
+              if (!hasChannel && !hasTo) {
+                throw new Error(
+                  'agentTurn jobs with delivery.mode="announce" require either delivery.channel or delivery.to to be set. For reminders, specify the target channel (e.g., "telegram") and recipient ID (e.g., chat ID), or ensure the agent session key contains a valid peer target for automatic inference.',
+                );
+              }
+            }
+          }
+
           return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {

@@ -26,6 +26,51 @@ ARG OPENCLAW_BUN_IMAGE="oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c
 # node:24-bookworm-slim (or podman) and replace the digests below with the
 # current multi-arch manifest list entries.
 
+# ── Stage 0: whisper.cpp builder ────────────────────────────────
+FROM debian:bookworm-slim AS whispercpp-builder
+
+ARG WHISPER_CPP_REF="v1.7.4"
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      cmake make g++ \
+      ca-certificates \
+      git \
+      && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Build a CPU-only whisper.cpp CLI + shared libs
+RUN git clone --depth 1 --branch "${WHISPER_CPP_REF}" https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp && \
+    cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build \
+      -DWHISPER_BUILD_TESTS=OFF \
+      -DWHISPER_BUILD_EXAMPLES=ON \
+      -DGGML_NATIVE=OFF \
+      -DGGML_OPENMP=ON && \
+    (cmake --build /tmp/whisper.cpp/build -j "$(nproc)" --target whisper-cli || \
+      cmake --build /tmp/whisper.cpp/build -j "$(nproc)" --target main) && \
+    mkdir -p /usr/local/bin /usr/local/lib && \
+    if [ -f /tmp/whisper.cpp/build/bin/whisper-cli ]; then \
+      install -m 0755 /tmp/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli; \
+    elif [ -f /tmp/whisper.cpp/build/bin/main ]; then \
+      install -m 0755 /tmp/whisper.cpp/build/bin/main /usr/local/bin/whisper-cli; \
+    elif [ -f /tmp/whisper.cpp/build/main ]; then \
+      install -m 0755 /tmp/whisper.cpp/build/main /usr/local/bin/whisper-cli; \
+    else \
+      echo "whisper.cpp build did not produce a known CLI binary" >&2; \
+      ls -la /tmp/whisper.cpp/build || true; \
+      exit 1; \
+    fi && \
+    if ls /tmp/whisper.cpp/build/src/libwhisper.so* >/dev/null 2>&1; then \
+      install -m 0644 /tmp/whisper.cpp/build/src/libwhisper.so* /usr/local/lib/; \
+    fi && \
+    if ls /tmp/whisper.cpp/build/ggml/src/libggml*.so* >/dev/null 2>&1; then \
+      install -m 0644 /tmp/whisper.cpp/build/ggml/src/libggml*.so* /usr/local/lib/; \
+    fi && \
+    strip /usr/local/bin/whisper-cli 2>/dev/null || true && \
+    rm -rf /tmp/whisper.cpp
+
+# ── Stage 1: Extension deps ────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
@@ -149,6 +194,8 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.title="OpenClaw" \
   org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
+ARG YTDLP_VERSION="2026.02.04"
+
 WORKDIR /app
 
 # Install runtime system utilities missing from bookworm-slim.
@@ -156,12 +203,48 @@ WORKDIR /app
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
+# Includes cmake/g++ for node-llama-cpp, ffmpeg for media, libgomp1 for whisper.cpp.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates procps hostname curl git lsof openssl python3 && \
+      ca-certificates procps hostname curl git lsof openssl python3 \
+      cmake make g++ \
+      dnsutils \
+      ffmpeg \
+      jq \
+      at \
+      libgomp1 \
+      pinentry-curses \
+      file && \
     update-ca-certificates
+
+# Install Google Cloud CLI (gcloud, gsutil, bq)
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | \
+      tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+      gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    apt-get update -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends google-cloud-cli && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Install yt-dlp
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) ytdlp_asset="yt-dlp_linux" ;; \
+      arm64) ytdlp_asset="yt-dlp_linux_aarch64" ;; \
+      *) echo "Unsupported architecture for bundled yt-dlp: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 3 --retry-delay 5 -o /tmp/SHA2-256SUMS \
+      "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/SHA2-256SUMS"; \
+    curl -fsSL --retry 3 --retry-delay 5 -o "/tmp/${ytdlp_asset}" \
+      "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/${ytdlp_asset}"; \
+    grep " ${ytdlp_asset}$" /tmp/SHA2-256SUMS > /tmp/SHA2-256SUMS.one; \
+    (cd /tmp && sha256sum -c /tmp/SHA2-256SUMS.one); \
+    install -m 0755 "/tmp/${ytdlp_asset}" /usr/local/bin/yt-dlp; \
+    rm -f /tmp/SHA2-256SUMS /tmp/SHA2-256SUMS.one
 
 RUN chown node:node /app
 
@@ -201,6 +284,56 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES; \
     fi
+
+# Install rbw (Bitwarden/Vaultwarden CLI)
+RUN curl -fsSL --retry 3 --retry-delay 5 \
+      https://github.com/doy/rbw/releases/download/1.15.0/rbw_1.15.0_linux_amd64.tar.gz \
+      -o /tmp/rbw.tgz && \
+    tar -xzf /tmp/rbw.tgz -C /tmp && \
+    install -m 0755 /tmp/rbw /usr/local/bin/rbw && \
+    install -m 0755 /tmp/rbw-agent /usr/local/bin/rbw-agent && \
+    rm -f /tmp/rbw /tmp/rbw-agent /tmp/rbw.tgz
+
+# Copy whisper.cpp CLI and shared libraries from builder
+COPY --from=whispercpp-builder /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
+COPY --from=whispercpp-builder /usr/local/lib/libwhisper.so* /usr/local/lib/
+COPY --from=whispercpp-builder /usr/local/lib/libggml*.so* /usr/local/lib/
+RUN ldconfig
+
+# Install Bun globally so the runtime user can execute bun and bunx.
+RUN curl -fsSL https://bun.sh/install | bash && \
+    install -m 0755 /root/.bun/bin/bun /usr/local/bin/bun && \
+    ln -sf /usr/local/bin/bun /usr/local/bin/bunx && \
+    rm -rf /root/.bun
+
+# Install Gemini CLI globally
+RUN npm install -g @google/gemini-cli@latest
+
+# Install Google Workspace CLI (gws) globally.
+# Debian Bookworm ships GLIBC 2.36; the prebuilt linux-gnu binary requires 2.39
+# (compiled on Ubuntu 24.04). Temporarily stub /usr/local/bin/ldd so platform.js
+# detects musl and downloads the statically-linked musl artifact instead, which
+# runs on any Linux regardless of system glibc version.
+RUN printf '#!/bin/sh\necho "musl libc"\n' > /usr/local/bin/ldd && \
+    chmod +x /usr/local/bin/ldd && \
+    npm install -g @googleworkspace/cli@latest && \
+    rm /usr/local/bin/ldd
+
+# Install Homebrew for the non-root runtime user.
+ENV HOMEBREW_PREFIX=/home/node/.linuxbrew
+ENV PATH="${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:/usr/local/bin:${PATH}"
+RUN mkdir -p "${HOMEBREW_PREFIX}" && \
+    git clone --depth=1 https://github.com/Homebrew/brew "${HOMEBREW_PREFIX}/Homebrew" && \
+    mkdir -p "${HOMEBREW_PREFIX}/Library" && \
+    ln -s "${HOMEBREW_PREFIX}/Homebrew/Library/Homebrew" "${HOMEBREW_PREFIX}/Library/Homebrew" && \
+    mkdir -p "${HOMEBREW_PREFIX}/bin" && \
+    ln -s ../Homebrew/bin/brew "${HOMEBREW_PREFIX}/bin/brew" && \
+    ln -sf "${HOMEBREW_PREFIX}/bin/brew" /usr/local/bin/brew && \
+    chown -R node:node "${HOMEBREW_PREFIX}"
+
+# Pre-build node-llama-cpp native bindings for local embeddings support
+# This initializes the bindings which triggers automatic compilation
+RUN node --input-type=module -e "import('node-llama-cpp').then(({ getLlama }) => getLlama()).then(() => console.log('Native bindings built successfully')).catch(e => { console.error('Warning: Failed to build node-llama-cpp bindings:', e.message); })" || true
 
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...

@@ -40,9 +40,9 @@ logs-follow:
 
 latest-release-tag:
 	git fetch --tags --quiet
-	@tag="$(git for-each-ref --sort=-version:refname --count=1 --format='%(refname:short)' 'refs/tags/v*')"; \
+	@tag="$(git for-each-ref --sort=-version:refname --format='%(refname:short)' 'refs/tags/v*' | grep -v -- '-' | head -1)"; \
 	if [ -z "$tag" ]; then \
-		echo "no v* tags found"; \
+		echo "no stable v* tags found"; \
 		exit 1; \
 	fi; \
 	echo "$tag"

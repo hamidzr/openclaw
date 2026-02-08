@@ -964,6 +964,7 @@ describe("cron tool", () => {
     expect(params?.patch?.sessionTarget).toBe("main");
     expect(params?.patch?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
   });
+
   it("passes through failureAlert=false for update", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
@@ -1175,5 +1176,40 @@ describe("cron tool", () => {
       kind: "agentTurn",
       toolsAllow: null,
     });
+  });
+
+  it("fails fast when agentTurn job has no delivery config after normalization", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("call-no-delivery", {
+        action: "add",
+        job: {
+          name: "reminder",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "agentTurn", message: "hello" },
+          // No delivery field, and session key has no peer target to infer from
+        },
+      }),
+    ).rejects.toThrow(/agentTurn jobs require delivery config/);
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("fails fast when agentTurn job has announce mode but no channel or target", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("call-announce-no-target", {
+        action: "add",
+        job: {
+          name: "reminder",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery: { mode: "announce" },
+          // No channel or to specified, and session key has no peer to infer
+        },
+      }),
+    ).rejects.toThrow(/require either delivery\.channel or delivery\.to/);
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
   });
 });
