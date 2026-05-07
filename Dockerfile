@@ -210,6 +210,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates procps hostname curl git lsof openssl python3 \
       cmake make g++ \
+      gnupg \
       dnsutils \
       ffmpeg \
       jq \
@@ -301,10 +302,9 @@ COPY --from=whispercpp-builder /usr/local/lib/libggml*.so* /usr/local/lib/
 RUN ldconfig
 
 # Install Bun globally so the runtime user can execute bun and bunx.
-RUN curl -fsSL https://bun.sh/install | bash && \
-    install -m 0755 /root/.bun/bin/bun /usr/local/bin/bun && \
-    ln -sf /usr/local/bin/bun /usr/local/bin/bunx && \
-    rm -rf /root/.bun
+COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
+RUN chmod 0755 /usr/local/bin/bun && \
+    ln -sf /usr/local/bin/bun /usr/local/bin/bunx
 
 # Install Gemini CLI globally
 RUN npm install -g @google/gemini-cli@latest
