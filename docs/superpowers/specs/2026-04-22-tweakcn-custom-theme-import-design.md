@@ -1,3 +1,11 @@
+---
+title: "Tweakcn Custom Theme Import Design"
+summary: "Approved design for importing one tweakcn custom theme slot into the Control UI."
+read_when:
+  - Implementing or reviewing Control UI custom theme import
+  - Changing tweakcn theme URL parsing, storage, token mapping, or theme application
+---
+
 # Tweakcn Custom Theme Import Design
 
 Status: approved in terminal on 2026-04-22
