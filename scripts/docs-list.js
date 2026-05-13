@@ -21,6 +21,7 @@ if (!statSync(DOCS_DIR).isDirectory()) {
 }
 
 const EXCLUDED_DIRS = new Set(["archive", "research"]);
+const EXCLUDED_FILES = new Set(["AGENTS.md", "CLAUDE.md"]);
 
 /**
  * @param {unknown[]} values
@@ -152,7 +153,9 @@ function extractMetadata(fullPath) {
 
 console.log("Listing all markdown files in docs folder:");
 
-const markdownFiles = walkMarkdownFiles(DOCS_DIR);
+const markdownFiles = walkMarkdownFiles(DOCS_DIR).filter(
+  (relativePath) => !EXCLUDED_FILES.has(relativePath),
+);
 
 for (const relativePath of markdownFiles) {
   const fullPath = join(DOCS_DIR, relativePath);
