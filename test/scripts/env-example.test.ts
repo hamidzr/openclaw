@@ -8,6 +8,7 @@ const documentedEnvPattern =
 const allowedDocumentedOmissions = new Set([
   "AKS_OIDC_ISSUER_URL",
   "CHUTES_CLIENT_SECRET",
+  "CUSTOM_API_KEY",
   "CHUTES_OAUTH_TOKEN",
   "CLIENT_SECRET",
   "COPILOT_GITHUB_TOKEN",
@@ -26,7 +27,10 @@ const allowedDocumentedOmissions = new Set([
   "YOUR_APP_ID",
   "YOUR_APP_SECRET",
   "YOUR_BOT_TOKEN",
+  "YOUR_DISCORD_BOT_TOKEN",
   "YOUR_KEY",
+  "YOUR_TELEGRAM_BOT_TOKEN",
+  "YOUR_TOKEN",
 ]);
 
 function collectMarkdownEnvVars(dir: string): Set<string> {
@@ -74,11 +78,12 @@ describe(".env.example", () => {
     expect(enabledAssignments).toEqual(["OPENCLAW_GATEWAY_TOKEN="]);
   });
 
-  it("covers documented provider, channel, and tool env vars", () => {
+  it("covers documented provider, channel, tool, and gateway env vars", () => {
     const documentedVars = new Set([
       ...collectMarkdownEnvVars("docs/providers"),
       ...collectMarkdownEnvVars("docs/channels"),
       ...collectMarkdownEnvVars("docs/tools"),
+      ...collectMarkdownEnvVars("docs/gateway"),
     ]);
     const missing = [...documentedVars]
       .filter((name) => !envExample.includes(name) && !allowedDocumentedOmissions.has(name))
