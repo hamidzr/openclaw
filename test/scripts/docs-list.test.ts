@@ -21,7 +21,7 @@ describe("docs-list", () => {
       writeDoc(
         root,
         "docs/guide.md",
-        '---\nsummary: "Example guide"\nread_when:\n  - Testing docs list\n---\n\n# Guide\n',
+        '---\nsummary: "Example guide"\nread_when:\n  - "Testing docs list"\n---\n\n# Guide\n',
       );
       writeDoc(
         root,
@@ -35,6 +35,7 @@ describe("docs-list", () => {
       });
 
       expect(output).toContain("guide.md - Example guide");
+      expect(output).toContain("  Read when: Testing docs list");
       expect(output).toContain("reference/templates/AGENTS.md - Workspace template for AGENTS.md");
       expect(output).not.toContain("AGENTS.md - [missing front matter]");
       expect(output).not.toContain("CLAUDE.md");

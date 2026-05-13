@@ -24,23 +24,34 @@ const EXCLUDED_DIRS = new Set(["archive", "research"]);
 const EXCLUDED_FILES = new Set(["AGENTS.md", "CLAUDE.md"]);
 
 /**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function normalizeMetadataString(value) {
+  const normalized =
+    typeof value === "string"
+      ? value.trim()
+      : typeof value === "number" || typeof value === "boolean"
+        ? String(value).trim()
+        : null;
+
+  return (
+    normalized
+      ?.replace(/^['"]|['"]$/g, "")
+      .replace(/\s+/g, " ")
+      .trim() || null
+  );
+}
+
+/**
  * @param {unknown[]} values
  * @returns {string[]}
  */
 function compactStrings(values) {
   const result = [];
   for (const value of values) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    const normalized =
-      typeof value === "string"
-        ? value.trim()
-        : typeof value === "number" || typeof value === "boolean"
-          ? String(value).trim()
-          : null;
-
-    if (normalized?.length > 0) {
+    const normalized = normalizeMetadataString(value);
+    if (normalized) {
       result.push(normalized);
     }
   }
@@ -122,7 +133,7 @@ function extractMetadata(fullPath) {
 
     if (collectingField === "read_when") {
       if (line.startsWith("- ")) {
-        const hint = line.slice(2).trim();
+        const hint = normalizeMetadataString(line.slice(2));
         if (hint) {
           readWhen.push(hint);
         }
@@ -138,11 +149,7 @@ function extractMetadata(fullPath) {
     return { summary: null, readWhen, error: "summary key missing" };
   }
 
-  const summaryValue = summaryLine.slice("summary:".length).trim();
-  const normalized = summaryValue
-    .replace(/^['"]|['"]$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const normalized = normalizeMetadataString(summaryLine.slice("summary:".length));
 
   if (!normalized) {
     return { summary: null, readWhen, error: "summary is empty" };
