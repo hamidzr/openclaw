@@ -33,6 +33,17 @@ const allowedDocumentedOmissions = new Set([
   "YOUR_TOKEN",
 ]);
 
+function collectEnvExampleNames(): Set<string> {
+  const result = new Set<string>();
+  for (const line of envExample.split("\n")) {
+    const match = /^#?\s*([A-Z][A-Z0-9_]+)=/.exec(line);
+    if (match) {
+      result.add(match[1]);
+    }
+  }
+  return result;
+}
+
 function collectMarkdownEnvVars(dir: string): Set<string> {
   const result = new Set<string>();
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -85,8 +96,9 @@ describe(".env.example", () => {
       ...collectMarkdownEnvVars("docs/tools"),
       ...collectMarkdownEnvVars("docs/gateway"),
     ]);
+    const envExampleNames = collectEnvExampleNames();
     const missing = [...documentedVars]
-      .filter((name) => !envExample.includes(name) && !allowedDocumentedOmissions.has(name))
+      .filter((name) => !envExampleNames.has(name) && !allowedDocumentedOmissions.has(name))
       .toSorted();
 
     expect(missing).toEqual([]);
