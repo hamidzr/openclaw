@@ -26,6 +26,7 @@ const allowedDocumentedOmissions = new Set([
   "YOUR_APP_ID",
   "YOUR_APP_SECRET",
   "YOUR_BOT_TOKEN",
+  "YOUR_KEY",
 ]);
 
 function collectMarkdownEnvVars(dir: string): Set<string> {
@@ -73,10 +74,11 @@ describe(".env.example", () => {
     expect(enabledAssignments).toEqual(["OPENCLAW_GATEWAY_TOKEN="]);
   });
 
-  it("covers documented provider and channel env vars", () => {
+  it("covers documented provider, channel, and tool env vars", () => {
     const documentedVars = new Set([
       ...collectMarkdownEnvVars("docs/providers"),
       ...collectMarkdownEnvVars("docs/channels"),
+      ...collectMarkdownEnvVars("docs/tools"),
     ]);
     const missing = [...documentedVars]
       .filter((name) => !envExample.includes(name) && !allowedDocumentedOmissions.has(name))
