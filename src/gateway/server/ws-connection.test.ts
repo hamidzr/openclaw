@@ -301,11 +301,37 @@ describe("attachGatewayWsConnectionHandler", () => {
       }),
     ).toBe(true);
 
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(10_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+    expect(socket.ping).toHaveBeenLastCalledWith(Buffer.from("1"));
+
+    socket.emit("pong", Buffer.from("1"));
+    const pongEvent = JSON.parse(String(socket.send.mock.calls.at(-1)?.[0] ?? "{}")) as {
+      event?: string;
+      payload?: { status?: string; received?: number; sampleCount?: number };
+    };
+    expect(pongEvent.event).toBe("gateway.latency");
+    expect(pongEvent.payload).toMatchObject({ status: "ok", received: 1, sampleCount: 1 });
+
+    vi.advanceTimersByTime(10_000);
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+    expect(socket.ping).toHaveBeenLastCalledWith(Buffer.from("2"));
+
+    vi.advanceTimersByTime(10_000);
+    expect(socket.ping).toHaveBeenCalledTimes(3);
+    const timeoutEvent = JSON.parse(String(socket.send.mock.calls.at(-1)?.[0] ?? "{}")) as {
+      event?: string;
+      payload?: { status?: string; timedOut?: number; packetLossPercent?: number };
+    };
+    expect(timeoutEvent.event).toBe("gateway.latency");
+    expect(timeoutEvent.payload).toMatchObject({
+      status: "timeout",
+      timedOut: 1,
+      packetLossPercent: 50,
+    });
 
     socket.emit("close", 1000, Buffer.from("done"));
-    vi.advanceTimersByTime(25_000);
-    expect(socket.ping).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(10_000);
+    expect(socket.ping).toHaveBeenCalledTimes(3);
   });
 });
