@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
-import { performance } from "node:perf_hooks";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
@@ -35,160 +34,6 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const LOG_HEADER_MAX_LEN = 300;
 const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
 const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
-const GATEWAY_WS_PING_INTERVAL_MS = 10_000;
-const GATEWAY_WS_PING_SAMPLE_LIMIT = 12;
-
-type GatewayWsPingOutcome = {
-  ok: boolean;
-  rttMs?: number;
-};
-
-type GatewayWsPingState = {
-  nextId: number;
-  pending: { id: number; sentAtMs: number } | null;
-  sent: number;
-  received: number;
-  timedOut: number;
-  latePongs: number;
-  consecutiveTimeouts: number;
-  outcomes: GatewayWsPingOutcome[];
-  rtts: number[];
-};
-
-type GatewayWsLatencyPayload = {
-  status: "measuring" | "ok" | "warn" | "timeout";
-  intervalMs: number;
-  timeoutMs: number;
-  sent: number;
-  received: number;
-  timedOut: number;
-  latePongs: number;
-  consecutiveTimeouts: number;
-  sampleCount: number;
-  timeoutPercent: number;
-  packetLossPercent: number;
-  lastRttMs?: number;
-  avgRttMs?: number;
-  minRttMs?: number;
-  maxRttMs?: number;
-  jitterMs?: number;
-};
-
-function createGatewayWsPingState(): GatewayWsPingState {
-  return {
-    nextId: 1,
-    pending: null,
-    sent: 0,
-    received: 0,
-    timedOut: 0,
-    latePongs: 0,
-    consecutiveTimeouts: 0,
-    outcomes: [],
-    rtts: [],
-  };
-}
-
-function roundMetric(value: number): number {
-  return Math.max(0, Math.round(value));
-}
-
-function pushBounded<T>(items: T[], item: T, limit: number): void {
-  items.push(item);
-  if (items.length > limit) {
-    items.splice(0, items.length - limit);
-  }
-}
-
-function readPingId(data: RawData): number | null {
-  const raw = Buffer.isBuffer(data)
-    ? data.toString("utf8")
-    : Array.isArray(data)
-      ? Buffer.concat(data).toString("utf8")
-      : data instanceof ArrayBuffer
-        ? Buffer.from(data).toString("utf8")
-        : String(data);
-  const id = Number.parseInt(raw, 10);
-  return Number.isFinite(id) && id > 0 ? id : null;
-}
-
-function calcJitterMs(rtts: number[]): number | undefined {
-  if (rtts.length < 2) {
-    return undefined;
-  }
-  let totalDelta = 0;
-  for (let index = 1; index < rtts.length; index += 1) {
-    totalDelta += Math.abs(rtts[index] - rtts[index - 1]);
-  }
-  return roundMetric(totalDelta / (rtts.length - 1));
-}
-
-function buildGatewayWsLatencyPayload(state: GatewayWsPingState): GatewayWsLatencyPayload {
-  const settledCount = state.outcomes.length;
-  const timeoutCount = state.outcomes.filter((outcome) => !outcome.ok).length;
-  const timeoutPercent = settledCount > 0 ? roundMetric((timeoutCount / settledCount) * 100) : 0;
-  const avgRttMs =
-    state.rtts.length > 0
-      ? roundMetric(state.rtts.reduce((total, rtt) => total + rtt, 0) / state.rtts.length)
-      : undefined;
-  const jitterMs = calcJitterMs(state.rtts);
-  const lastRttMs =
-    state.rtts.length > 0 ? roundMetric(state.rtts[state.rtts.length - 1]) : undefined;
-  const status =
-    state.consecutiveTimeouts > 0
-      ? "timeout"
-      : avgRttMs === undefined
-        ? "measuring"
-        : avgRttMs >= 250 || (jitterMs ?? 0) >= 100 || timeoutPercent > 0
-          ? "warn"
-          : "ok";
-  return {
-    status,
-    intervalMs: GATEWAY_WS_PING_INTERVAL_MS,
-    timeoutMs: GATEWAY_WS_PING_INTERVAL_MS,
-    sent: state.sent,
-    received: state.received,
-    timedOut: state.timedOut,
-    latePongs: state.latePongs,
-    consecutiveTimeouts: state.consecutiveTimeouts,
-    sampleCount: settledCount,
-    timeoutPercent,
-    packetLossPercent: timeoutPercent,
-    ...(lastRttMs !== undefined && { lastRttMs }),
-    ...(avgRttMs !== undefined && { avgRttMs }),
-    ...(state.rtts.length > 0 && { minRttMs: roundMetric(Math.min(...state.rtts)) }),
-    ...(state.rtts.length > 0 && { maxRttMs: roundMetric(Math.max(...state.rtts)) }),
-    ...(jitterMs !== undefined && { jitterMs }),
-  };
-}
-
-function recordGatewayWsPingTimeout(state: GatewayWsPingState): void {
-  state.pending = null;
-  state.timedOut += 1;
-  state.consecutiveTimeouts += 1;
-  pushBounded(state.outcomes, { ok: false }, GATEWAY_WS_PING_SAMPLE_LIMIT);
-}
-
-function recordGatewayWsPong(state: GatewayWsPingState, data: RawData, nowMs: number): void {
-  const id = readPingId(data);
-  if (!state.pending || id !== state.pending.id) {
-    state.latePongs += 1;
-    return;
-  }
-  const rttMs = Math.max(0, nowMs - state.pending.sentAtMs);
-  state.pending = null;
-  state.received += 1;
-  state.consecutiveTimeouts = 0;
-  pushBounded(state.outcomes, { ok: true, rttMs }, GATEWAY_WS_PING_SAMPLE_LIMIT);
-  pushBounded(state.rtts, rttMs, GATEWAY_WS_PING_SAMPLE_LIMIT);
-}
-
-function emitGatewayWsLatency(send: (obj: unknown) => void, state: GatewayWsPingState): void {
-  send({
-    type: "event",
-    event: "gateway.latency",
-    payload: buildGatewayWsLatencyPayload(state),
-  });
-}
 
 function replaceControlChars(value: string): string {
   let cleaned = "";
@@ -467,28 +312,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     let pingTimer: ReturnType<typeof setInterval> | undefined;
-    const pingState = createGatewayWsPingState();
-
-    socket.on("pong", (data: RawData) => {
-      recordGatewayWsPong(pingState, data, performance.now());
-      emitGatewayWsLatency(send, pingState);
-    });
-
-    const sendProtocolPing = () => {
-      if (pingState.pending) {
-        recordGatewayWsPingTimeout(pingState);
-        emitGatewayWsLatency(send, pingState);
-      }
-      const id = pingState.nextId;
-      pingState.nextId += 1;
-      try {
-        socket.ping(Buffer.from(String(id)));
-        pingState.pending = { id, sentAtMs: performance.now() };
-        pingState.sent += 1;
-      } catch {
-        // close() clears the timer; ping can race with a socket already entering CLOSING
-      }
-    };
 
     const close = (code = 1000, reason?: string) => {
       if (closed) {
@@ -649,7 +472,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         releasePreauthBudget();
         client = next;
         clients.add(next);
-        pingTimer = setInterval(sendProtocolPing, GATEWAY_WS_PING_INTERVAL_MS);
+        pingTimer = setInterval(() => {
+          try {
+            socket.ping();
+          } catch {
+            // close() clears the timer; ping can race with a socket already entering CLOSING.
+          }
+        }, 25_000);
         return true;
       },
       setHandshakeState: (next) => {

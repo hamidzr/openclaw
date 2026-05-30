@@ -182,7 +182,6 @@ export const GATEWAY_EVENTS = [
   "talk.mode",
   "shutdown",
   "health",
-  "gateway.latency",
   "heartbeat",
   "cron",
   "node.pair.requested",
